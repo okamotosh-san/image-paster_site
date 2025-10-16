@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>画像ペタ→URL作成（GitHubに直アップ）</title>
+  <style>
+    :root { --bg:#0f1115; --panel:#141824; --muted:#99a2c2; --text:#e6e9f2; --brand:#6ea8fe; --ok:#71d18b; --warn:#ffcc66; --err:#ff6b6b; }
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 system-ui, -apple-system, Segoe UI, Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif}
+    .wrap{max-width:980px;margin:40px auto;padding:0 20px}
+    h1{font-weight:800;letter-spacing:.2px;margin:0 0 8px}
+    p.sub{color:var(--muted);margin:0 0 24px}
+    .panel{background:linear-gradient(180deg,#171b26,#121621);border:1px solid #23283a;border-radius:16px;padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:16px}
+    @media (max-width:920px){.grid{grid-template-columns:1fr}}
+    label{display:block;font-weight:700;margin:12px 0 6px}
+    input[type=text], input[type=password], textarea, select{
+      width:100%; padding:10px 12px; border-radius:10px; border:1px solid #2a3046; background:#0e1220; color:var(--text);
+      outline:none; box-shadow:inset 0 1px 0 #0a0d18;
+    }
+    input::placeholder{color:#657099}
+    .muted{color:var(--muted);font-size:13px}
+    .pill{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:#0f1426;border:1px solid #263056;color:#b7c1ea}
+    .drop{display:flex;align-items:center;justify-content:center;text-align:center;min-height:260px;border:2px dashed #2b3352;border-radius:14px;background:#0a0e1c;padding:18px;cursor:pointer}
+    .drop:hover{border-color:#3a4572}
+    .btn{cursor:pointer; user-select:none; display:inline-flex; gap:10px; align-items:center; justify-content:center; padding:10px 14px; border-radius:12px; font-weight:700; border:1px solid #2a3046; background:#12182a; color:#e9edff}
+    .btn.brand{background:linear-gradient(180deg,#2b5ddb,#264fc0);border-color:#2b5ddb}
+    .btn.ghost{background:#0d1222}
+    .btn:disabled{opacity:.6; cursor:not-allowed}
+    .row{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+    .preview{border-radius:12px; overflow:hidden; background:#0b0f1d; border:1px solid #21263a}
+    .preview img{display:block; width:100%; height:auto}
+    .code{white-space:nowrap; overflow:auto; background:#0b0f17; border:1px solid #1f2538; border-radius:10px; padding:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .success{color:var(--ok)} .warn{color:var(--warn)} .error{color:var(--err)}
+    footer{margin:28px 0 8px; color:#7d86ad; font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>画像ペタ → 公開URL</h1>
+    <p class="sub">ブラウザ上だけで動くシングルファイル。画像を<span class="pill">⌘/Ctrl+V で貼り付け</span> or <span class="pill">ドラッグ&ドロップ</span> → GitHubリポジトリへ直接コミットしてURLを取得します（トークンは端末内にのみ保存）。</p>
+
+    <div class="grid">
+      <section class="panel" id="left">
+        <div id="drop" class="drop">
+          <div>
+            <div style="font-size:18px; font-weight:800; margin-bottom:6px">ここに画像を貼り付け or ドロップ</div>
+            <div class="muted">PNG / JPG / WEBP。複数OK（順番にアップロード）。</div>
+            <div style="margin-top:10px"><button class="btn ghost" id="pick">ファイルを選ぶ</button><input type="file" id="file" accept="image/*" multiple hidden></div>
+          </div>
+        </div>
+        <div id="preview" class="preview" style="display:none;margin-top:14px"></div>
+        <div id="status" class="muted" style="margin-top:12px"></div>
+      </section>
+
+      <section class="panel" id="right">
+        <label>GitHub 設定（初回のみ）</label>
+        <div class="row">
+          <input id="owner" type="text" placeholder="owner（例: yourname）">
+          <input id="repo" type="text" placeholder="repo（例: image-host）">
+        </div>
+        <div class="row">
+          <input id="branch" type="text" placeholder="branch（例: main）」>
+          <input id="folder" type="text" placeholder="保存フォルダ（例: images/）">
+        </div>
+        <input id="token" type="password" placeholder="GitHub PAT（contents:write 権限の Fine-grained token 推奨）">
+        <div class="muted" style="margin-top:6px">※トークン等は <b>localStorage</b> に保存され、このページ外へ送信されません（GitHub API への直接通信のみ）。</div>
+
+        <label style="margin-top:18px">公開URLのベース</label>
+        <input id="publicBase" type="text" placeholder="例: https://yourname.github.io/image-host/">
+        <div class="muted">GitHub Pages を有効にし、<span class="pill">ベースURL + ファイル名</span> が最終リンクになります。</div>
+
+        <div class="row" style="margin-top:14px">
+          <button class="btn" id="save">設定を保存</button>
+          <button class="btn ghost" id="clear">設定を消去</button>
+        </div>
+
+        <label style="margin-top:18px">アップロード時のオプション</label>
+        <div class="row">
+          <select id="format">
+            <option value="keep">拡張子を維持</option>
+            <option value="webp">WebP に変換（非可逆・軽量）</option>
+            <option value="png">PNG に変換（可逆）</option>
+            <option value="jpeg">JPEG に変換（品質80）</option>
+          </select>
+          <input id="maxW" type="text" placeholder="最大幅（px, 空なら原寸）">
+          <input id="prefix" type="text" placeholder="ファイル名プレフィックス（任意）">
+        </div>
+        
+        <div style="margin-top:16px" id="lastUrlWrap"></div>
+      </section>
+    </div>
+
+    <footer>
+      <div>使い方：1) 右で GitHub 設定 → 保存。2) 左に画像をペースト/ドロップ。3) アップロード完了後、URLが表示されます。Ctrl/Cmd+Cでコピー。</div>
+      <div style="margin-top:6px">メモ：スプレッドシートでは <code>=IMAGE("URL")</code>（Google Sheets）等で貼り付け可能。<span class="warn">データURLは非推奨</span>。</div>
+    </footer>
+  </div>
+
+  <script>
+    // ===== Utilities =====
+    const $ = (sel) => document.querySelector(sel);
+    const st = (msg, cls="") => { const s = $('#status'); s.className = `muted ${cls}`; s.textContent = msg; };
+
+    // Persist config in localStorage (never sent to any server except GitHub)
+    const cfgKeys = ['owner','repo','branch','folder','token','publicBase','format','maxW','prefix'];
+    const loadCfg = () => cfgKeys.forEach(k => { const v = localStorage.getItem('imgcfg_'+k); if (v !== null) $('#'+k).value = v; });
+    const saveCfg = () => { cfgKeys.forEach(k => localStorage.setItem('imgcfg_'+k, $('#'+k).value.trim())); st('設定を保存しました', 'success'); };
+    const clearCfg = () => { cfgKeys.forEach(k => localStorage.removeItem('imgcfg_'+k)); cfgKeys.forEach(k => { const el=$('#'+k); if (el) el.value='';}); st('設定を消去しました', 'warn'); };
+
+    // Image processing
+    async function blobFromImage(file, {format='keep', maxW=''}){
+      const type = file.type;
+      if (format==='keep' && (!maxW || isNaN(+maxW))) return file;
+      const img = await createImageBitmap(file);
+      const canvas = document.createElement('canvas');
+      let w = img.width, h = img.height;
+      if (maxW && !isNaN(+maxW) && +maxW > 0 && w > +maxW){ h = Math.round(h * (+maxW / w)); w = +maxW; }
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      let mime = type;
+      let quality = 0.8;
+      if (format==='webp') mime = 'image/webp';
+      if (format==='png') mime = 'image/png';
+      if (format==='jpeg') mime = 'image/jpeg';
+      const blob = await new Promise(res => canvas.toBlob(res, mime, quality));
+      return blob || file;
+    }
+
+    // Filename generator
+    function genFilename(originalName, {format='keep', prefix=''}){
+      const extFromType = (t)=> ({'image/webp':'webp','image/png':'png','image/jpeg':'jpg'})[t] || 'png';
+      const now = new Date();
+      const ts = now.toISOString().replace(/[-:TZ.]/g, '').slice(0,14); // YYYYMMDDhhmmss
+      const rand = Math.random().toString(36).slice(2,8);
+      const cleanPrefix = prefix ? prefix.replace(/[^a-zA-Z0-9_-]/g,'') + '_' : '';
+      const originalExt = (originalName.split('.').pop() || '').toLowerCase();
+      let ext = originalExt || 'png';
+      if (format !== 'keep') {
+        ext = ({webp:'webp', png:'png', jpeg:'jpg'})[format] || extFromType(originalExt);
+      }
+      return `${cleanPrefix}${ts}_${rand}.${ext}`;
+    }
+
+    // GitHub upload via Contents API
+    async function uploadToGitHub({owner, repo, branch, folder, token, filename, blob}){
+      const path = (folder || '').replace(/^\/+|\/+$|\.+$/g,'');
+      const fullPath = path ? `${path}/${filename}` : filename;
+      const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(fullPath)}`;
+      const arrayBuffer = await blob.arrayBuffer();
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+      const body = { message: `upload: ${fullPath}`, content: base64, branch: branch || 'main' };
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github+json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok){
+        const t = await res.text();
+        throw new Error(`GitHub API ${res.status}: ${t}`);
+      }
+      const data = await res.json();
+      return { path: fullPath, sha: data.content && data.content.sha };
+    }
+
+    // UI hookup
+    loadCfg();
+    $('#save').onclick = saveCfg;
+    $('#clear').onclick = clearCfg;
+    $('#pick').onclick = () => $('#file').click();
+    $('#file').onchange = (e) => handleFiles(e.target.files);
+
+    const drop = $('#drop');
+    ;['dragenter','dragover'].forEach(ev=> drop.addEventListener(ev, e=>{ e.preventDefault(); drop.style.borderColor = '#4a5aa6';}));
+    ;['dragleave','drop'].forEach(ev=> drop.addEventListener(ev, e=>{ e.preventDefault(); drop.style.borderColor = '#2b3352'; if(ev==='drop'){ handleFiles(e.dataTransfer.files); } }));
+
+    window.addEventListener('paste', (e)=>{
+      if (!e.clipboardData) return;
+      const items = [...e.clipboardData.items].filter(i=> i.type.startsWith('image/'));
+      if (items.length){
+        e.preventDefault();
+        const files = items.map(i=> i.getAsFile()).filter(Boolean);
+        handleFiles(files);
+      }
+    });
+
+    async function handleFiles(files){
+      if (!files || !files.length) return;
+      const owner = $('#owner').value.trim();
+      const repo = $('#repo').value.trim();
+      const branch = $('#branch').value.trim() || 'main';
+      const folder = $('#folder').value.trim();
+      const token = $('#token').value.trim();
+      const publicBase = $('#publicBase').value.trim();
+      if (!owner || !repo || !token || !publicBase){
+        st('まず右側で GitHub 設定と公開URLベースを保存してください', 'warn');
+        return;
+      }
+      const format = $('#format').value;
+      const maxW = $('#maxW').value.trim();
+      const prefix = $('#prefix').value.trim();
+
+      const pv = $('#preview');
+      pv.style.display='block';
+      pv.innerHTML = '';
+
+      for (const file of files){
+        try{
+          st('画像処理中…');
+          const processed = await blobFromImage(file, {format, maxW});
+          const filename = genFilename(file.name || 'image', {format, prefix});
+
+          // Show preview immediately
+          const url = URL.createObjectURL(processed);
+          const card = document.createElement('div');
+          card.style.padding='10px';
+          card.innerHTML = `<div class="row" style="justify-content:space-between"><div class="muted">${filename}</div><button class="btn" disabled>アップロード中…</button></div><img style="margin-top:8px;max-height:360px;width:auto;display:block" src="${url}">`;
+          pv.appendChild(card);
+
+          // Upload
+          const up = await uploadToGitHub({owner, repo, branch, folder, token, filename, blob: processed});
+          const link = new URL((publicBase.endsWith('/')? publicBase: publicBase+'/') + up.path);
+
+          // Update card
+          const btn = card.querySelector('.btn');
+          btn.textContent = 'URLをコピー';
+          btn.disabled = false;
+          btn.onclick = async () => {
+            await navigator.clipboard.writeText(String(link));
+            btn.textContent = 'コピーしました！';
+            setTimeout(()=> btn.textContent='URLをコピー', 1400);
+          };
+
+          const out = document.createElement('div');
+          out.style.marginTop = '8px';
+          out.innerHTML = `<div class="code">${String(link)}</div>`;
+          card.appendChild(out);
+
+          $('#lastUrlWrap').innerHTML = `<label>最後に作成したURL</label><div class="code">${String(link)}</div>`;
+          st('アップロード完了', 'success');
+        }catch(err){
+          console.error(err);
+          st('エラー: ' + err.message, 'error');
+        }
+      }
+    }
+  </script>
+</body>
+</html>
