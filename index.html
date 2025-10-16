@@ -100,17 +100,86 @@
   <script>
     // ===== Utilities =====
     const $ = (sel) => document.querySelector(sel);
-    const st = (msg, cls="") => { const s = $('#status'); s.className = `muted ${cls}`; s.textContent = msg; };
+    const st = (msg, cls="") => { const s = $('#status'); if(!s) return; s.className = `muted ${cls}`; s.textContent = msg; };
 
-    // Persist config in localStorage (never sent to any server except GitHub)
+    // ===== Resilient storage (handles sandboxed iframes / privacy modes) =====
+    const safeStorage = (()=>{
+      try {
+        const k = '__test__'+Math.random();
+        window.localStorage.setItem(k,'1');
+        window.localStorage.removeItem(k);
+        return {
+          get:(key)=> window.localStorage.getItem(key),
+          set:(key,val)=> window.localStorage.setItem(key,val),
+          del:(key)=> window.localStorage.removeItem(key),
+          kind:'localStorage'
+        };
+      } catch(e){
+        // Fallback to sessionStorage
+        try{
+          const k='__test__'+Math.random();
+          window.sessionStorage.setItem(k,'1');
+          window.sessionStorage.removeItem(k);
+          return {
+            get:(key)=> window.sessionStorage.getItem(key),
+            set:(key,val)=> window.sessionStorage.setItem(key,val),
+            del:(key)=> window.sessionStorage.removeItem(key),
+            kind:'sessionStorage'
+          };
+        }catch(e2){
+          // Final in-memory store
+          const mem = new Map();
+          return {
+            get:(key)=> mem.get(key) ?? null,
+            set:(key,val)=> { mem.set(key,String(val)); },
+            del:(key)=> { mem.delete(key); },
+            kind:'memory'
+          };
+        }
+      }
+    })();
+
+    // Show storage mode to help diagnose
+    window.addEventListener('DOMContentLoaded', ()=>{
+      const status = $('#status');
+      if(status){
+        const span = document.createElement('span');
+        span.className='muted';
+        span.style.marginLeft='6px';
+        span.textContent = `(保存先: ${safeStorage.kind})`;
+        status.appendChild(span);
+      }
+    });
+
+    // Persist config (never sent anywhere except GitHub API during upload)
     const cfgKeys = ['owner','repo','branch','folder','token','publicBase','format','maxW','prefix'];
-    const loadCfg = () => cfgKeys.forEach(k => { const v = localStorage.getItem('imgcfg_'+k); if (v !== null) $('#'+k).value = v; });
-    const saveCfg = () => { cfgKeys.forEach(k => localStorage.setItem('imgcfg_'+k, $('#'+k).value.trim())); st('設定を保存しました', 'success'); };
-    const clearCfg = () => { cfgKeys.forEach(k => localStorage.removeItem('imgcfg_'+k)); cfgKeys.forEach(k => { const el=$('#'+k); if (el) el.value='';}); st('設定を消去しました', 'warn'); };
+    const loadCfg = () => {
+      cfgKeys.forEach(k => { const v = safeStorage.get('imgcfg_'+k); if (v !== null) { const el = $('#'+k); if(el) el.value = v; } });
+    };
+    const saveCfg = () => {
+      try{
+        cfgKeys.forEach(k => { const el=$('#'+k); if(el) safeStorage.set('imgcfg_'+k, el.value.trim()); });
+        st('設定を保存しました', 'success');
+      }catch(err){
+        console.error('Save error', err);
+        st('設定保存に失敗しました（ブラウザの保存制限の可能性）', 'error');
+      }
+    };
+    const clearCfg = () => {
+      cfgKeys.forEach(k => safeStorage.del('imgcfg_'+k));
+      cfgKeys.forEach(k => { const el=$('#'+k); if (el) el.value='';});
+      st('設定を消去しました', 'warn');
+    };
+
+    // Auto-save on input change to give immediate feedback even if button click blocked
+    window.addEventListener('input', (e)=>{
+      const id = e.target && e.target.id; if (!id || !cfgKeys.includes(id)) return;
+      try{ safeStorage.set('imgcfg_'+id, e.target.value.trim()); st('自動保存しました', 'success'); }catch(err){ st('自動保存に失敗（保存制限かも）', 'error'); }
+    });
 
     // Image processing
     async function blobFromImage(file, {format='keep', maxW=''}){
-      const type = file.type;
+      const type = file.type || 'image/png';
       if (format==='keep' && (!maxW || isNaN(+maxW))) return file;
       const img = await createImageBitmap(file);
       const canvas = document.createElement('canvas');
@@ -130,7 +199,6 @@
 
     // Filename generator
     function genFilename(originalName, {format='keep', prefix=''}){
-      const extFromType = (t)=> ({'image/webp':'webp','image/png':'png','image/jpeg':'jpg'})[t] || 'png';
       const now = new Date();
       const ts = now.toISOString().replace(/[-:TZ.]/g, '').slice(0,14); // YYYYMMDDhhmmss
       const rand = Math.random().toString(36).slice(2,8);
@@ -138,7 +206,7 @@
       const originalExt = (originalName.split('.').pop() || '').toLowerCase();
       let ext = originalExt || 'png';
       if (format !== 'keep') {
-        ext = ({webp:'webp', png:'png', jpeg:'jpg'})[format] || extFromType(originalExt);
+        ext = ({webp:'webp', png:'png', jpeg:'jpg'})[format] || ext;
       }
       return `${cleanPrefix}${ts}_${rand}.${ext}`;
     }
@@ -166,18 +234,24 @@
 
     // UI hookup
     loadCfg();
-    $('#save').onclick = saveCfg;
-    $('#clear').onclick = clearCfg;
-    $('#pick').onclick = () => $('#file').click();
-    $('#file').onchange = (e) => handleFiles(e.target.files);
+    const saveBtn = $('#save');
+    if (saveBtn) saveBtn.onclick = saveCfg;
+    const clearBtn = $('#clear');
+    if (clearBtn) clearBtn.onclick = clearCfg;
+    const pickBtn = $('#pick');
+    if (pickBtn) pickBtn.onclick = () => $('#file').click();
+    const fileInput = $('#file');
+    if (fileInput) fileInput.onchange = (e) => handleFiles(e.target.files);
 
     const drop = $('#drop');
-    ;['dragenter','dragover'].forEach(ev=> drop.addEventListener(ev, e=>{ e.preventDefault(); drop.style.borderColor = '#4a5aa6';}));
-    ;['dragleave','drop'].forEach(ev=> drop.addEventListener(ev, e=>{ e.preventDefault(); drop.style.borderColor = '#2b3352'; if(ev==='drop'){ handleFiles(e.dataTransfer.files); } }));
+    if (drop){
+      ['dragenter','dragover'].forEach(ev=> drop.addEventListener(ev, e=>{ e.preventDefault(); drop.style.borderColor = '#4a5aa6';}));
+      ['dragleave','drop'].forEach(ev=> drop.addEventListener(ev, e=>{ e.preventDefault(); drop.style.borderColor = '#2b3352'; if(ev==='drop'){ handleFiles(e.dataTransfer.files); } }));
+    }
 
     window.addEventListener('paste', (e)=>{
       if (!e.clipboardData) return;
-      const items = [...e.clipboardData.items].filter(i=> i.type.startsWith('image/'));
+      const items = [...e.clipboardData.items].filter(i=> i.type && i.type.startsWith('image/'));
       if (items.length){
         e.preventDefault();
         const files = items.map(i=> i.getAsFile()).filter(Boolean);
@@ -202,8 +276,10 @@
       const prefix = $('#prefix').value.trim();
 
       const pv = $('#preview');
-      pv.style.display='block';
-      pv.innerHTML = '';
+      if (pv){
+        pv.style.display='block';
+        pv.innerHTML = '';
+      }
 
       for (const file of files){
         try{
@@ -216,7 +292,7 @@
           const card = document.createElement('div');
           card.style.padding='10px';
           card.innerHTML = `<div class="row" style="justify-content:space-between"><div class="muted">${filename}</div><button class="btn" disabled>アップロード中…</button></div><img style="margin-top:8px;max-height:360px;width:auto;display:block" src="${url}">`;
-          pv.appendChild(card);
+          pv && pv.appendChild(card);
 
           // Upload
           const up = await uploadToGitHub({owner, repo, branch, folder, token, filename, blob: processed});
